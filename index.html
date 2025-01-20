@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GLSL Raymarching with Controls</title>
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+        .shader-container {
+            width: 100%;
+            max-width: 800px;
+            margin: 20px auto;
+        }
+        canvas {
+            width: 100%;
+            height: 400px;
+            border: 1px solid #333;
+        }
+        .controls {
+            margin: 20px 0;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 8px;
+        }
+        .instructions {
+            margin: 10px 0;
+            padding: 10px;
+            background: #e0e0e0;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="shader-container">
+        <h1>GLSL Raymarching Demo</h1>
+        <div class="instructions">
+            <strong>Controls:</strong><br>
+            WASD - Move camera<br>
+            Mouse drag - Look around<br>
+            Space/Shift - Move up/down
+        </div>
+        <canvas id="glCanvas" tabindex="0"></canvas>
+        <div class="controls">
+            <label for="mouseSpeed">Mouse Sensitivity:</label>
+            <input type="range" id="mouseSpeed" min="0.1" max="2.0" step="0.1" value="1.0">
+        </div>
+    </div>
+
+    <script>
+        // Camera state
+        const camera = {
+            position: { x: 0, y: 1, z: 0 },
+            rotation: { x: 0, y: 0 },
+            moveSpeed: 0.1,
+            rotateSpeed: 0.003,
+            keys: new Set()
+        };
+
+        // Mouse state
+        const mouse = {
+            lastX: 0,
+            lastY: 0,
+            dragging: false
+        };
+
+        function initControls(canvas) {
+            // Pointer lock setup
+            canvas.addEventListener('click', () => {
+                canvas.requestPointerLock();
+            });
+
+            document.addEventListener('pointerlockchange', () => {
+                if (document.pointerLockElement === canvas) {
+                    document.body.classList.add('locked');
+                } else {
+                    document.body.classList.remove('locked');
+                }
+            });
+
+            // Mouse movement
+            document.addEventListener('mousemove', (e) => {
+                if (document.pointerLockElement === canvas) {
+                    const sensitivity = -parseFloat(document.querySelector('#mouseSpeed').value);
+                    camera.rotation.y -= e.movementX * camera.rotateSpeed * sensitivity;
+                    camera.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, 
+                        camera.rotation.x - e.movementY * camera.rotateSpeed * sensitivity));
+                }
+            });
+
+            // Keyboard controls
+            window.addEventListener('keydown', (e) => {
+                camera.keys.add(e.key.toLowerCase());
+                if (e.key === ' ' || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+                    e.preventDefault();
+                }
+            });
+            window.addEventListener('keyup', (e) => {
+                camera.keys.delete(e.key.toLowerCase());
+            });
+
+            // Prevent context menu in FPS mode
+            canvas.addEventListener('contextmenu', (e) => {
+                if (document.pointerLockElement === canvas) {
+                    e.preventDefault();
+                }
+            });
+        }
+
+        function updateCamera() {
+            // Forward movement
+            const forward = {
+                x: Math.sin(camera.rotation.y),
+                z: Math.cos(camera.rotation.y)
+            };
+
+            // Right movement
+            const right = {
+                x: Math.sin(camera.rotation.y + Math.PI/2),
+                z: Math.cos(camera.rotation.y + Math.PI/2)
+            };
+
+            // WASD movement
+            if (camera.keys.has('w')) {
+                camera.position.x += forward.x * camera.moveSpeed;
+                camera.position.z += forward.z * camera.moveSpeed;
+            }
+            if (camera.keys.has('s')) {
+                camera.position.x -= forward.x * camera.moveSpeed;
+                camera.position.z -= forward.z * camera.moveSpeed;
+            }
+            if (camera.keys.has('a')) {
+                camera.position.x -= right.x * camera.moveSpeed;
+                camera.position.z -= right.z * camera.moveSpeed;
+            }
+            if (camera.keys.has('d')) {
+                camera.position.x += right.x * camera.moveSpeed;
+                camera.position.z += right.z * camera.moveSpeed;
+            }
+
+            // // Up/Down movement
+            // if (camera.keys.has(' ')) { // Space
+            //     camera.position.y += camera.moveSpeed;
+            // }
+            // if (camera.keys.has('shift')) { // Shift
+            //     camera.position.y -= camera.moveSpeed;
+            // }
+        }
+
+        async function loadShaders() {
+            try {
+                const vsResponse = await fetch('vertex.glsl');
+                const fsResponse = await fetch('fragment.glsl');
+                
+                if (!vsResponse.ok || !fsResponse.ok) {
+                    throw new Error('Failed to load shaders');
+                }
+
+                const vsSource = await vsResponse.text();
+                const fsSource = await fsResponse.text();
+
+                initGL(vsSource, fsSource);
+            } catch (error) {
+                console.error('Error loading shaders:', error);
+                alert('Failed to load shaders. Check console for details.');
+            }
+        }
+
+        function initGL(vsSource, fsSource) {
+            const canvas = document.querySelector("#glCanvas");
+            initControls(canvas);
+            const gl = canvas.getContext("webgl");
+
+            if (!gl) {
+                alert("Unable to initialize WebGL.");
+                return;
+            }
+
+            function createShader(gl, type, source) {
+                const shader = gl.createShader(type);
+                gl.shaderSource(shader, source);
+                gl.compileShader(shader);
+                if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                    console.error('Shader compilation error:', gl.getShaderInfoLog(shader));
+                    gl.deleteShader(shader);
+                    return null;
+                }
+                return shader;
+            }
+
+            const vertexShader = createShader(gl, gl.VERTEX_SHADER, vsSource);
+            const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+
+            const shaderProgram = gl.createProgram();
+            gl.attachShader(shaderProgram, vertexShader);
+            gl.attachShader(shaderProgram, fragmentShader);
+            gl.linkProgram(shaderProgram);
+
+            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+                console.error('Shader program linking error:', gl.getProgramInfoLog(shaderProgram));
+                return;
+            }
+
+            const positionBuffer = gl.createBuffer();
+            gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+            const positions = [
+                -1.0, -1.0,
+                 1.0, -1.0,
+                -1.0,  1.0,
+                 1.0,  1.0,
+            ];
+            gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
+
+            const programInfo = {
+                attribLocations: {
+                    vertexPosition: gl.getAttribLocation(shaderProgram, 'aVertexPosition'),
+                },
+                uniformLocations: {
+                    time: gl.getUniformLocation(shaderProgram, 'uTime'),
+                    cameraPos: gl.getUniformLocation(shaderProgram, 'uCameraPos'),
+                    cameraRot: gl.getUniformLocation(shaderProgram, 'uCameraRot')
+                },
+            };
+
+            let timeSpeed = 1.0;
+
+            function render(now) {
+                now *= 0.001 * timeSpeed;
+
+                updateCamera();
+
+                const displayWidth = canvas.clientWidth;
+                const displayHeight = canvas.clientHeight;
+                if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+                    canvas.width = displayWidth;
+                    canvas.height = displayHeight;
+                    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+                }
+
+                gl.clearColor(0.0, 0.0, 0.0, 1.0);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+
+                gl.useProgram(shaderProgram);
+
+                gl.enableVertexAttribArray(programInfo.attribLocations.vertexPosition);
+                gl.vertexAttribPointer(
+                    programInfo.attribLocations.vertexPosition,
+                    2,
+                    gl.FLOAT,
+                    false,
+                    0,
+                    0
+                );
+
+                gl.uniform1f(programInfo.uniformLocations.time, now);
+                gl.uniform3f(programInfo.uniformLocations.cameraPos, 
+                    camera.position.x, camera.position.y, camera.position.z);
+                gl.uniform2f(programInfo.uniformLocations.cameraRot, 
+                    camera.rotation.x, camera.rotation.y);
+
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+                requestAnimationFrame(render);
+            }
+            requestAnimationFrame(render);
+
+            // Focus the canvas for keyboard input
+            canvas.focus();
+        }
+
+        window.onload = loadShaders;
+    </script>
+</body>
+</html>
