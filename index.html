@@ -6,10 +6,20 @@
     <title>GLSL Raymarching with Controls</title>
     <script src="https://unpkg.com/htmx.org@2.0.4"></script>
     <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            min-height: 100vh;
+        }
+        .main-content {
+            flex-grow: 1;
+            margin-right: 20px;
+        }
         .shader-container {
             width: 100%;
-            max-width: 800px;
-            margin: 20px auto;
+            max-width: 1200px;
+            margin: 0 auto;
         }
         canvas {
             width: 100%;
@@ -28,22 +38,65 @@
             background: #e0e0e0;
             border-radius: 4px;
         }
+        .shader-list {
+            width: 250px;
+            padding: 20px;
+            background: #f5f5f5;
+            border-radius: 8px;
+            flex-shrink: 0;
+        }
+        .shader-list h2 {
+            margin-top: 0;
+            margin-bottom: 15px;
+        }
+        .shader-button {
+            display: block;
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 10px;
+            background: #fff;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            cursor: pointer;
+            text-align: left;
+            transition: background-color 0.2s;
+        }
+        .shader-button:hover {
+            background: #eee;
+        }
+        .shader-button.active {
+            background: #007bff;
+            color: white;
+            border-color: #0056b3;
+        }
+        #currentShader {
+            margin-top: 10px;
+            font-style: italic;
+            color: #666;
+        }
     </style>
 </head>
 <body>
-    <div class="shader-container">
-        <h1>GLSL Raymarching Demo</h1>
-        <div class="instructions">
-            <strong>Controls:</strong><br>
-            WASD - Move camera<br>
-            Mouse drag - Look around<br>
-            Space/Shift - Move up/down
+    <div class="main-content">
+        <div class="shader-container">
+            <h1>GLSL Raymarching Demo</h1>
+            <div class="instructions">
+                <strong>Controls:</strong><br>
+                WASD - Move camera<br>
+                Mouse drag - Look around<br>
+                Space/Shift - Move up/down
+            </div>
+            <canvas id="glCanvas" tabindex="0"></canvas>
+            <div class="controls">
+                <label for="mouseSpeed">Mouse Sensitivity:</label>
+                <input type="range" id="mouseSpeed" min="0.1" max="2.0" step="0.1" value="1.0">
+            </div>
         </div>
-        <canvas id="glCanvas" tabindex="0"></canvas>
-        <div class="controls">
-            <label for="mouseSpeed">Mouse Sensitivity:</label>
-            <input type="range" id="mouseSpeed" min="0.1" max="2.0" step="0.1" value="1.0">
-        </div>
+    </div>
+    <div class="shader-list">
+        <h2>Available Shaders</h2>
+        <div id="shaderButtons"></div>
+        <div id="currentShader"></div>
     </div>
 
     <script>
@@ -62,6 +115,10 @@
             lastY: 0,
             dragging: false
         };
+
+        let currentProgram = null;
+        let currentProgramInfo = null;
+        let gl = null;
 
         function initControls(canvas) {
             // Pointer lock setup
@@ -107,19 +164,16 @@
         }
 
         function updateCamera() {
-            // Forward movement
             const forward = {
                 x: Math.sin(camera.rotation.y),
                 z: Math.cos(camera.rotation.y)
             };
 
-            // Right movement
             const right = {
                 x: Math.sin(camera.rotation.y + Math.PI/2),
                 z: Math.cos(camera.rotation.y + Math.PI/2)
             };
 
-            // WASD movement
             if (camera.keys.has('w')) {
                 camera.position.x += forward.x * camera.moveSpeed;
                 camera.position.z += forward.z * camera.moveSpeed;
@@ -136,20 +190,42 @@
                 camera.position.x += right.x * camera.moveSpeed;
                 camera.position.z += right.z * camera.moveSpeed;
             }
-
-            // // Up/Down movement
-            // if (camera.keys.has(' ')) { // Space
-            //     camera.position.y += camera.moveSpeed;
-            // }
-            // if (camera.keys.has('shift')) { // Shift
-            //     camera.position.y -= camera.moveSpeed;
-            // }
+            if (camera.keys.has(' ')) {
+                camera.position.y += camera.moveSpeed;
+            }
+            if (camera.keys.has('shift')) {
+                camera.position.y -= camera.moveSpeed;
+            }
         }
 
-        async function loadShaders() {
+        function loadShaderList() {
+            // Predefined list of shaders
+            const shaderFiles = [
+                'raymarch.glsl',
+                'terrain.glsl',
+                // Add more shader files as needed
+            ];
+            
+            const shaderButtonsContainer = document.getElementById('shaderButtons');
+            
+            shaderFiles.forEach(file => {
+                const button = document.createElement('button');
+                button.className = 'shader-button';
+                button.textContent = file;
+                button.onclick = () => loadAndSwitchShader(file);
+                shaderButtonsContainer.appendChild(button);
+            });
+
+            // Load the first shader by default
+            if (shaderFiles.length > 0) {
+                loadAndSwitchShader(shaderFiles[0]);
+            }
+        }
+
+        async function loadAndSwitchShader(shaderFile) {
             try {
                 const vsResponse = await fetch('vertex.glsl');
-                const fsResponse = await fetch('fragment.glsl');
+                const fsResponse = await fetch(`shaders/${shaderFile}`);
                 
                 if (!vsResponse.ok || !fsResponse.ok) {
                     throw new Error('Failed to load shaders');
@@ -158,45 +234,79 @@
                 const vsSource = await vsResponse.text();
                 const fsSource = await fsResponse.text();
 
-                initGL(vsSource, fsSource);
+                // Update active button state
+                document.querySelectorAll('.shader-button').forEach(button => {
+                    button.classList.remove('active');
+                    if (button.textContent === shaderFile) {
+                        button.classList.add('active');
+                    }
+                });
+
+                // Update current shader display
+                document.getElementById('currentShader').textContent = `Current: ${shaderFile}`;
+
+                if (!gl) {
+                    initGL(vsSource, fsSource);
+                } else {
+                    updateShaderProgram(vsSource, fsSource);
+                }
             } catch (error) {
-                console.error('Error loading shaders:', error);
-                alert('Failed to load shaders. Check console for details.');
+                console.error('Error loading shader:', error);
+                alert('Failed to load shader. Check console for details.');
             }
+        }
+
+        function createShader(gl, type, source) {
+            const shader = gl.createShader(type);
+            gl.shaderSource(shader, source);
+            gl.compileShader(shader);
+            if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+                console.error('Shader compilation error:', gl.getShaderInfoLog(shader));
+                gl.deleteShader(shader);
+                return null;
+            }
+            return shader;
+        }
+
+        function updateShaderProgram(vsSource, fsSource) {
+            const vertexShader = createShader(gl, gl.VERTEX_SHADER, vsSource);
+            const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
+
+            const newProgram = gl.createProgram();
+            gl.attachShader(newProgram, vertexShader);
+            gl.attachShader(newProgram, fragmentShader);
+            gl.linkProgram(newProgram);
+
+            if (!gl.getProgramParameter(newProgram, gl.LINK_STATUS)) {
+                console.error('Shader program linking error:', gl.getProgramInfoLog(newProgram));
+                return;
+            }
+
+            // Clean up old program
+            if (currentProgram) {
+                gl.deleteProgram(currentProgram);
+            }
+
+            currentProgram = newProgram;
+            currentProgramInfo = {
+                attribLocations: {
+                    vertexPosition: gl.getAttribLocation(newProgram, 'aVertexPosition'),
+                },
+                uniformLocations: {
+                    time: gl.getUniformLocation(newProgram, 'uTime'),
+                    cameraPos: gl.getUniformLocation(newProgram, 'uCameraPos'),
+                    cameraRot: gl.getUniformLocation(newProgram, 'uCameraRot')
+                },
+            };
         }
 
         function initGL(vsSource, fsSource) {
             const canvas = document.querySelector("#glCanvas");
             initControls(canvas);
-            const gl = canvas.getContext("webgl");
+            gl = canvas.getContext("webgl");
 
             if (!gl) {
                 alert("Unable to initialize WebGL.");
-                return;
-            }
-
-            function createShader(gl, type, source) {
-                const shader = gl.createShader(type);
-                gl.shaderSource(shader, source);
-                gl.compileShader(shader);
-                if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-                    console.error('Shader compilation error:', gl.getShaderInfoLog(shader));
-                    gl.deleteShader(shader);
-                    return null;
-                }
-                return shader;
-            }
-
-            const vertexShader = createShader(gl, gl.VERTEX_SHADER, vsSource);
-            const fragmentShader = createShader(gl, gl.FRAGMENT_SHADER, fsSource);
-
-            const shaderProgram = gl.createProgram();
-            gl.attachShader(shaderProgram, vertexShader);
-            gl.attachShader(shaderProgram, fragmentShader);
-            gl.linkProgram(shaderProgram);
-
-            if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
-                console.error('Shader program linking error:', gl.getProgramInfoLog(shaderProgram));
                 return;
             }
 
@@ -210,64 +320,54 @@
             ];
             gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(positions), gl.STATIC_DRAW);
 
-            const programInfo = {
-                attribLocations: {
-                    vertexPosition: gl.getAttribLocation(shaderProgram, 'aVertexPosition'),
-                },
-                uniformLocations: {
-                    time: gl.getUniformLocation(shaderProgram, 'uTime'),
-                    cameraPos: gl.getUniformLocation(shaderProgram, 'uCameraPos'),
-                    cameraRot: gl.getUniformLocation(shaderProgram, 'uCameraRot')
-                },
-            };
-
-            let timeSpeed = 1.0;
-
-            function render(now) {
-                now *= 0.001 * timeSpeed;
-
-                updateCamera();
-
-                const displayWidth = canvas.clientWidth;
-                const displayHeight = canvas.clientHeight;
-                if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
-                    canvas.width = displayWidth;
-                    canvas.height = displayHeight;
-                    gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-                }
-
-                gl.clearColor(0.0, 0.0, 0.0, 1.0);
-                gl.clear(gl.COLOR_BUFFER_BIT);
-
-                gl.useProgram(shaderProgram);
-
-                gl.enableVertexAttribArray(programInfo.attribLocations.vertexPosition);
-                gl.vertexAttribPointer(
-                    programInfo.attribLocations.vertexPosition,
-                    2,
-                    gl.FLOAT,
-                    false,
-                    0,
-                    0
-                );
-
-                gl.uniform1f(programInfo.uniformLocations.time, now);
-                gl.uniform3f(programInfo.uniformLocations.cameraPos, 
-                    camera.position.x, camera.position.y, camera.position.z);
-                gl.uniform2f(programInfo.uniformLocations.cameraRot, 
-                    camera.rotation.x, camera.rotation.y);
-
-                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-                requestAnimationFrame(render);
-            }
+            updateShaderProgram(vsSource, fsSource);
             requestAnimationFrame(render);
 
             // Focus the canvas for keyboard input
             canvas.focus();
         }
 
-        window.onload = loadShaders;
+        function render(now) {
+            now *= 0.001;
+
+            updateCamera();
+
+            const canvas = gl.canvas;
+            const displayWidth = canvas.clientWidth;
+            const displayHeight = canvas.clientHeight;
+            if (canvas.width !== displayWidth || canvas.height !== displayHeight) {
+                canvas.width = displayWidth;
+                canvas.height = displayHeight;
+                gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+            }
+
+            gl.clearColor(0.0, 0.0, 0.0, 1.0);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+
+            gl.useProgram(currentProgram);
+
+            gl.enableVertexAttribArray(currentProgramInfo.attribLocations.vertexPosition);
+            gl.vertexAttribPointer(
+                currentProgramInfo.attribLocations.vertexPosition,
+                2,
+                gl.FLOAT,
+                false,
+                0,
+                0
+            );
+
+            gl.uniform1f(currentProgramInfo.uniformLocations.time, now);
+            gl.uniform3f(currentProgramInfo.uniformLocations.cameraPos, 
+                camera.position.x, camera.position.y, camera.position.z);
+            gl.uniform2f(currentProgramInfo.uniformLocations.cameraRot, 
+                camera.rotation.x, camera.rotation.y);
+
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+            requestAnimationFrame(render);
+        }
+
+        window.onload = loadShaderList;
     </script>
 </body>
 </html>
