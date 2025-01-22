@@ -2,6 +2,7 @@ precision highp float;
 uniform float uTime;
 uniform vec3 uCameraPos;
 uniform vec2 uCameraRot;
+uniform vec2 uResolution;
 
 const int MAX_STEPS = 1000;
 const float MAX_DIST = 100.0;
@@ -140,7 +141,7 @@ vec4 raymarch(vec3 ro, vec3 rd) {
 }
 
 void main() {
-    vec2 uv = (gl_FragCoord.xy - 0.5 * vec2(800.0, 400.0)) / 400.0;
+    vec2 uv = (gl_FragCoord.xy - 0.5 * uResolution.xy) / uResolution.y;
     
     // Camera setup with rotation
     vec3 ro = uCameraPos;

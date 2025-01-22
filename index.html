@@ -203,6 +203,7 @@
             const shaderFiles = [
                 'raymarch.glsl',
                 'terrain.glsl',
+                'claude_terrain.glsl',
                 // Add more shader files as needed
             ];
             
@@ -295,7 +296,8 @@
                 uniformLocations: {
                     time: gl.getUniformLocation(newProgram, 'uTime'),
                     cameraPos: gl.getUniformLocation(newProgram, 'uCameraPos'),
-                    cameraRot: gl.getUniformLocation(newProgram, 'uCameraRot')
+                    cameraRot: gl.getUniformLocation(newProgram, 'uCameraRot'),
+                    resolution: gl.getUniformLocation(newProgram, 'uResolution'),
                 },
             };
         }
@@ -361,6 +363,8 @@
                 camera.position.x, camera.position.y, camera.position.z);
             gl.uniform2f(currentProgramInfo.uniformLocations.cameraRot, 
                 camera.rotation.x, camera.rotation.y);
+            
+            gl.uniform2f(currentProgramInfo.uniformLocations.resolution, canvas.width, canvas.height);
 
             gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
